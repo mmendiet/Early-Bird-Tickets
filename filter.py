@@ -1,6 +1,7 @@
 import numpy as np
 import matplotlib.pyplot as plt
-from scipy.misc import imsave, imread
+# from scipy.misc import imsave, imread
+from imageio import imsave, imread
 from scipy.ndimage import fourier_gaussian
 from PIL import Image
 """

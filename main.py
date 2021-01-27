@@ -191,9 +191,9 @@ else:
         model = torch.nn.DataParallel(model, device_ids=args.gpu_ids)
         # model = torch.nn.parallel.DistributedDataParallel(model, device_ids=args.gpu_ids, find_unused_parameters=True)
 
-if args.dataset == 'imagenet':
-    pruned_flops = print_model_param_flops(model.cpu(), 224)
-    model.cuda()
+# if args.dataset == 'imagenet':
+    # pruned_flops = print_model_param_flops(model.cpu(), 224)
+    # model.cuda()
 
 
 optimizer = optim.SGD(model.parameters(), lr=args.lr, momentum=args.momentum, weight_decay=args.weight_decay)
@@ -243,11 +243,11 @@ def accuracy(output, target, topk=(1,)):
 
     _, pred = output.topk(maxk, 1, True, True)
     pred = pred.t()
-    correct = pred.eq(target.view(1, -1).expand_as(pred))
+    correct = pred.eq(target.reshape(1, -1).expand_as(pred))
 
     res = []
     for k in topk:
-        correct_k = correct[:k].view(-1).float().sum(0)
+        correct_k = correct[:k].reshape(-1).float().sum(0)
         res.append(correct_k.mul_(100.0 / batch_size))
     return res
 
@@ -290,13 +290,14 @@ def test():
     for data, target in test_loader:
         if args.cuda:
             data, target = data.cuda(), target.cuda()
-        data, target = Variable(data, volatile=True), Variable(target)
-        output = model(data)
-        test_loss += F.cross_entropy(output, target, size_average=False).item() # sum up batch loss
-        # pred = output.data.max(1, keepdim=True)[1] # get the index of the max log-probability
-        # correct += pred.eq(target.data.view_as(pred)).cpu().sum()
-        prec1, prec5 = accuracy(output.data, target.data, topk=(1, 5))
-        test_acc += prec1.item()
+        with torch.no_grad():
+            # data, target = Variable(data, volatile=True), Variable(target)
+            output = model(data)
+            test_loss += F.cross_entropy(output, target, size_average=False).item() # sum up batch loss
+            # pred = output.data.max(1, keepdim=True)[1] # get the index of the max log-probability
+            # correct += pred.eq(target.data.view_as(pred)).cpu().sum()
+            prec1, prec5 = accuracy(output.data, target.data, topk=(1, 5))
+            test_acc += prec1.item()
 
     test_loss /= len(test_loader.dataset)
     print('\nTest set: Average loss: {:.4f}, Accuracy: {}/{} ({:.2f}%)\n'.format(
@@ -374,43 +375,25 @@ class EarlyBird():
             return False
 
 best_prec1 = 0.
-flag_30 = True
-flag_50 = True
-flag_70 = True
-early_bird_30 = EarlyBird(0.3)
-early_bird_50 = EarlyBird(0.5)
-early_bird_70 = EarlyBird(0.7)
+early_bird_percent = [0.05, 0.1, 0.15, 0.2, 0.25, 0.3, 0.35, 0.4, 0.45, 0.5]
+early_bird_list = [EarlyBird(x) for x in early_bird_percent]
+found = {}
 for epoch in range(args.start_epoch, args.epochs):
-    if early_bird_30.early_bird_emerge(model):
-        print("[early_bird_30] Find EB!!!!!!!!!, epoch: "+str(epoch))
-        if flag_30:
+    print("Found: " + str(found))
+    for eb in early_bird_list:
+        if eb.early_bird_emerge(model) and eb.percent not in list(found.keys()):
+            print("[early_bird_{}] Found EB!!!!!!!!!, epoch: {}".format(eb.percent, epoch))
             save_checkpoint({
-            'epoch': epoch + 1,
+            'epoch': epoch,
             'state_dict': model.state_dict(),
             'best_prec1': best_prec1,
             'optimizer': optimizer.state_dict(),
-            }, is_best, 'EB-30-'+str(epoch+1), filepath=args.save)
-            flag_30 = False
-    if early_bird_50.early_bird_emerge(model):
-        print("[early_bird_50] Find EB!!!!!!!!!, epoch: "+str(epoch))
-        if flag_50:
-            save_checkpoint({
-            'epoch': epoch + 1,
-            'state_dict': model.state_dict(),
-            'best_prec1': best_prec1,
-            'optimizer': optimizer.state_dict(),
-            }, is_best, 'EB-50-'+str(epoch+1), filepath=args.save)
-            flag_50 = False
-    if early_bird_70.early_bird_emerge(model):
-        print("[early_bird_70] Find EB!!!!!!!!!, epoch: "+str(epoch))
-        if flag_70:
-            save_checkpoint({
-            'epoch': epoch + 1,
-            'state_dict': model.state_dict(),
-            'best_prec1': best_prec1,
-            'optimizer': optimizer.state_dict(),
-            }, is_best, 'EB-70-'+str(epoch+1), filepath=args.save)
-            flag_70 = False
+            }, is_best, 'EB-{}-'.format(eb.percent,epoch), filepath=args.save)
+            found[eb.percent] = epoch
+    if set(found.keys() == set(early_bird_list)):
+        print('Finished finding EB tickets')
+        print(found)
+        break
     if epoch in args.schedule:
         for param_group in optimizer.param_groups:
             param_group['lr'] *= 0.1
@@ -420,12 +403,12 @@ for epoch in range(args.start_epoch, args.epochs):
     np.savetxt(os.path.join(args.save, 'record.txt'), history_score, fmt = '%10.5f', delimiter=',')
     is_best = prec1 > best_prec1
     best_prec1 = max(prec1, best_prec1)
-    save_checkpoint({
-        'epoch': epoch + 1,
-        'state_dict': model.state_dict(),
-        'best_prec1': best_prec1,
-        'optimizer': optimizer.state_dict(),
-    }, is_best, epoch, filepath=args.save)
+    # save_checkpoint({
+    #     'epoch': epoch + 1,
+    #     'state_dict': model.state_dict(),
+    #     'best_prec1': best_prec1,
+    #     'optimizer': optimizer.state_dict(),
+    # }, is_best, epoch, filepath=args.save)
 
 print("Best accuracy: "+str(best_prec1))
 history_score[-1][0] = best_prec1
